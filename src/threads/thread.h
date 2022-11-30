@@ -4,6 +4,8 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "synch.h"
+#include <hash.h>
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -100,6 +102,17 @@ struct thread
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
+    struct semaphore child_lock;
+    struct semaphore free_lock; //wait에서 exit_stat 값 받을때 까지
+    struct semaphore early_lock; //부모가 자식 thread보다 먼저 종료됨을 방지
+    struct list_elem child_elem;
+    struct list child;
+    struct thread* parents;
+    int exit_stat;
+
+    struct file *fd[128];
+
+    struct hash virtual; // virtual memory 관리 hash
   };
 
 /* If false (default), use round-robin scheduler.

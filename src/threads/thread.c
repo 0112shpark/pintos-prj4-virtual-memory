@@ -170,6 +170,7 @@ thread_create (const char *name, int priority,
   struct kernel_thread_frame *kf;
   struct switch_entry_frame *ef;
   struct switch_threads_frame *sf;
+  enum intr_level old_level;
   tid_t tid;
 
   ASSERT (function != NULL);
@@ -182,6 +183,7 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+  old_level = intr_disable();
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -198,6 +200,11 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
+  /*add child element*/
+  list_push_back(&(thread_current()->child), &(t->child_elem));
+  
+  intr_set_level(old_level);
+  
   /* Add to run queue. */
   thread_unblock (t);
 
@@ -291,7 +298,7 @@ thread_exit (void)
      when it calls thread_schedule_tail(). */
   intr_disable ();
   list_remove (&thread_current()->allelem);
-  thread_current ()->status = THREAD_DYING;
+  running_thread()->status = THREAD_DYING;
   schedule ();
   NOT_REACHED ();
 }
@@ -463,10 +470,21 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
-
-  old_level = intr_disable ();
+  t->parents = running_thread();
+  
+  //old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
-  intr_set_level (old_level);
+  list_init(&(t->child));
+  sema_init(&(t->child_lock), 0);
+  sema_init(&(t->free_lock), 0);
+  sema_init(&(t->early_lock), 0);
+
+  for(int i=0; i<128;i++)
+  {
+    t->fd[i]=NULL;
+  }
+  //list_push_back(&(running_thread()->child), &(t->child_elem));
+  //intr_set_level (old_level);
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and

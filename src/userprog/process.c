@@ -7,6 +7,7 @@
 #include <string.h>
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
+#include "userprog/syscall.h"
 #include "userprog/tss.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
@@ -17,9 +18,14 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "vm/page.h"
+#include "vm/frame.h"
+#include "vm/swap.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+struct thread *get_child(int pid);
+
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -30,21 +36,138 @@ process_execute (const char *file_name)
 {
   char *fn_copy;
   tid_t tid;
-
+  char command[256];
+  
+ 
+  //printf("file_name: %s\n", file_name);
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
-
+  
+  /* exit에서 thread name을 받기위해 명령어만 따로 parsing*/
+  strlcpy(command,fn_copy,strlen(fn_copy)+1);
+  int j=0;
+  while(1){
+    if(command[j]==' '|| command[j]=='\0'){
+      command[j]='\0';
+      break;
+    }
+    else{
+      j++;
+    }
+  }
+  //printf("at process execute : %s\n", fn_copy);
+  if(filesys_open(command) == NULL){
+    //printf("filesys_open fail\n");
+    return -1;
+  }
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (command, PRI_DEFAULT, start_process, fn_copy); // 오류나면 고치기/////
+  //자식 process가 생길 때 까지 lock
+  sema_down(&thread_current()->early_lock);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
+  
+  struct thread *cur =thread_current(); 
+  struct thread *child; 
+  struct list_elem *list = list_begin(&(cur)->child); // child의 list
+  // 종료된 child를 list에서 제거 - process_wait에서 제거하기
+  while(1) 
+  {
+    child = list_entry(list, struct thread, child_elem); // list의 첫 시작
+    if(child->exit_stat == -1){
+      return process_wait(tid);
+    }
+    else if(list == list_end(&(cur->child)))// 마지막에 도달
+      break;
+    list = list_next(list);
+  }
+
   return tid;
 }
 
+/* 스택을 쌓는 함수*/
+void make_stack(char *filename, void **esp)
+{
+  char **buf; //나뉜 문자열을 담을 문자열배열
+  int argc = 0; //문자열 갯수
+  char temp_filename[256]; //strtok_r을 위한 임시배열
+  uint32_t address[256]; //문자열의 주소를 담을 배열
+  char *token;
+  char *ptr;
+  int buf_len;
+  int total_len =0 ; //4byte align을 위한 문자열의 전체 길이
+
+  strlcpy(temp_filename, filename, strlen(filename)+1);
+  token  = strtok_r(temp_filename, " ", &ptr);
+
+  while(token != NULL) // 동적할당을 위한 문자열 갯수 세기
+  {
+    argc += 1;
+    token = strtok_r(NULL, " ", &ptr); //" "로 parsing
+  }
+  buf = (char**)malloc(sizeof(char*) * argc);
+
+  strlcpy(temp_filename,filename, strlen(filename)+1);
+  token  = strtok_r(temp_filename, " ", &ptr);
+  
+  for(int i=0; i<argc; i++)
+  {
+    buf[i] = token;
+    token  = strtok_r(NULL, " ", &ptr);
+  }
+  /*for(int i=0; i<argc; i++)
+  {
+    printf("\n %d번째 token: %s\n", i, buf[i]);
+  }*/
+
+  for(int i=argc-1; i>=0; i--){
+    buf_len=strlen(buf[i])+1; // 자른 문자열의 길이 +'\0'
+    *esp -= buf_len; //stack 늘리기
+    total_len += buf_len;
+    memcpy(*esp, buf[i], buf_len); // 문자열 복사
+    address[i] = (uint32_t)(*esp); // 주소 복사
+    
+  }
+
+  /*for(int i=argc-1; i>=0; i--){
+    printf("%s가 %x에 있음\n", buf[i], address[i]);
+  }
+  printf("전체 문자열 길이: %d\n", total_len);*/
+  *esp -= (4 - (total_len % 4)) % 4; // word align
+ 
+  /* NULL 값 넣어주기*/
+  *esp -= 4; 
+  **(uint32_t**)esp = 0;
+  for(int i=argc-1; i>=0; i--){
+    *esp -= 4;
+    **(uint32_t**)esp = (uint32_t)address[i]; // 주소 넣어주기
+  }
+
+  /* 문자열의 시작주소 넣어주기*/
+  *esp -= 4;
+  **(uint32_t**)esp = *esp+4;
+
+  /* 문자열 갯수 넣어주기*/
+  *esp -= 4;
+  **(uint32_t**)esp = argc;
+
+  /* return address 넣어주기*/
+  *esp -= 4;
+  **(uint32_t**)esp = 0;
+
+  free(buf);
+
+
+  //hex_dump(*esp, *esp, 100,1);
+
+  
+  
+  
+}
 /* A thread function that loads a user process and starts it
    running. */
 static void
@@ -52,19 +175,43 @@ start_process (void *file_name_)
 {
   char *file_name = file_name_;
   struct intr_frame if_;
+  //char command[256];
   bool success;
 
+  // virtual memory initialization
+  init_virtual(&thread_current()->virtual);
+
+  //printf("\n\n\n%s\n\n", file_name);
+  /* 명령어 parsing */
+  /*strlcpy(command,file_name,strlen(file_name));
+  int i=0;
+  while(1){
+    if(command[i]==' '|| command[i]=='\0'){
+      command[i]='\0';
+      break;
+    }
+    else{
+      i++;
+    }
+  }*/
+  //printf("%s\n\n\n", command);
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
-
+  //make_stack(file_name, &if_.esp);
+  //child 로드 완료, lock 해제
+  sema_up(&thread_current()->parents->early_lock);
   /* If load failed, quit. */
-  palloc_free_page (file_name);
-  if (!success) 
-    thread_exit ();
+  free_page (file_name);
+  
+  if(!success){
+    //printf("fail\n");
+    exit(-1);
+  }
+   
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -86,21 +233,58 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
-  return -1;
+  struct thread *child = get_child(child_tid);
+  int exit_status;
+  //if(child == NULL)
+    //
+  if(child == NULL)
+  {//printf("NULL thread\n");
+    return -1;
+  }
+    sema_down(&(child->child_lock));
+    exit_status = child -> exit_stat;
+    list_remove(&(child->child_elem));
+    sema_up(&(child->free_lock));
+    return exit_status;
+ 
 }
+/* child process의 pid 반환*/
+struct thread *get_child(int pid){
+  
+  struct thread *cur =thread_current(); //현재 thread
+  struct thread *child; //받은 child thread
+  struct list_elem *list = list_begin(&(cur->child)); // child의 list
 
+ 
+  
+  while(1) /* 찾을때까지 무한루프*/
+  {
+    child = list_entry(list, struct thread, child_elem); // list의 첫 시작
+    //printf("%d", child->tid);
+    if(child->tid == pid){
+      return child;
+    }
+    else if(list == list_end(&(cur->child)))// 마지막에 도달
+      break;
+    list = list_next(list);
+  }
+  return NULL;
+}
 /* Free the current process's resources. */
 void
 process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
-
+  
+  // hash table 제거
+  kill_hash(&cur->virtual);
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
+  
   if (pd != NULL) 
     {
       /* Correct ordering here is crucial.  We must set
@@ -114,6 +298,9 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+    sema_up(&(cur->child_lock));
+    sema_down(&(cur->free_lock));
+  
 }
 
 /* Sets up the CPU for running user code in the current
@@ -214,18 +401,34 @@ load (const char *file_name, void (**eip) (void), void **esp)
   off_t file_ofs;
   bool success = false;
   int i;
+  char command[256]; // 명령어를 담기위한 배열
 
+  //printf("Load stage!\n");
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
   if (t->pagedir == NULL) 
     goto done;
   process_activate ();
 
+  /* 명령어만 따로 parsing*/
+  strlcpy(command,file_name,strlen(file_name)+1);
+  int j=0;
+  while(1){
+    if(command[j]==' '|| command[j]=='\0'){
+      command[j]='\0';
+      break;
+    }
+    else{
+      j++;
+    }
+  }
+  //printf("load(command): %s\n", command);
   /* Open executable file. */
-  file = filesys_open (file_name);
+  
+  file = filesys_open (command);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      printf ("load %s: open failed\n", command);
       goto done; 
     }
 
@@ -305,6 +508,9 @@ load (const char *file_name, void (**eip) (void), void **esp)
   if (!setup_stack (esp))
     goto done;
 
+  /*스택 쌓기*/
+  make_stack(file_name, esp);
+
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
 
@@ -313,6 +519,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
  done:
   /* We arrive here whether the load is successful or not. */
   file_close (file);
+  
   return success;
 }
 
@@ -388,6 +595,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   ASSERT (ofs % PGSIZE == 0);
 
   file_seek (file, ofs);
+  
   while (read_bytes > 0 || zero_bytes > 0) 
     {
       /* Calculate how to fill this page.
@@ -395,14 +603,15 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
          and zero the final PAGE_ZERO_BYTES bytes. */
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
-
+      
+      // virtual memory에 page 넣는 부분 제거
       /* Get a page of memory. */
-      uint8_t *kpage = palloc_get_page (PAL_USER);
-      if (kpage == NULL)
+      //uint8_t *kpage = palloc_get_page (PAL_USER);
+      /*if (kpage == NULL)
         return false;
 
       /* Load this page. */
-      if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
+      /*if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
         {
           palloc_free_page (kpage);
           return false; 
@@ -410,15 +619,36 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       memset (kpage + page_read_bytes, 0, page_zero_bytes);
 
       /* Add the page to the process's address space. */
-      if (!install_page (upage, kpage, writable)) 
+      /*if (!install_page (upage, kpage, writable)) 
         {
           palloc_free_page (kpage);
           return false; 
-        }
+        }*/
+      
+     
+      //virtual entry 추가
+      //virtual entry 생성
+      struct virtual_entry *ve =  malloc (sizeof (struct virtual_entry));
+      //printf("file read: %d\n",file_read (file, kpage, page_read_bytes));
+      // 변수 초기화
+      ve->type = VM_BIN;
+      ve->vaddr = upage;
+      ve->ok_write = writable;
+      ve->phy_loaded = false;
+      ve->file = file_reopen(file);
+      ve->offset = ofs;
+      //ve->locked = false;
+      ve->read_bytes = page_read_bytes;
+      ve->zero_bytes = page_zero_bytes;
 
+      //virtual entry를 hash table에 삽입
+      insert_hash(&thread_current()->virtual, ve);
+      //printf("offset : %d\n", ve->offset);
+      
       /* Advance. */
       read_bytes -= page_read_bytes;
       zero_bytes -= page_zero_bytes;
+      ofs += page_read_bytes;
       upage += PGSIZE;
     }
   return true;
@@ -429,7 +659,34 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack (void **esp) 
 {
-  uint8_t *kpage;
+  struct page *kpage;
+  bool success = false;
+
+  kpage = alloc_page (PAL_USER | PAL_ZERO);
+  
+      success = install_page ((uint8_t *) PHYS_BASE- PGSIZE, kpage->paddr, true);
+      
+      if (success){
+        *esp = PHYS_BASE;
+        // virtual entry 삽입
+        struct virtual_entry *ve =  malloc (sizeof (struct virtual_entry));
+        // 변수 초기화
+        ve->vaddr = (uint8_t *)PHYS_BASE - PGSIZE;
+        ve->type = VM_ANON;
+        ve->ok_write = true;
+        ve->phy_loaded = true;
+        //ve->locked = true;
+        kpage->page_ve = ve;
+        //virtual entry를 hash table에 삽입
+        insert_hash(&thread_current()->virtual, ve);
+        //printf("fileread:%d\n",ve->offset);
+        return true;
+      }
+      else{
+        free_page (kpage->paddr);
+        return false;
+      }
+  /*uint8_t *kpage;
   bool success = false;
 
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
@@ -441,7 +698,9 @@ setup_stack (void **esp)
       else
         palloc_free_page (kpage);
     }
-  return success;
+  return success;*/
+  
+
 }
 
 /* Adds a mapping from user virtual address UPAGE to kernel
@@ -462,4 +721,99 @@ install_page (void *upage, void *kpage, bool writable)
      address, then map our page there. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
+}
+
+// page fault handling
+bool handle_mm_fault(struct virtual_entry *ve)
+{
+    //page 할당
+    struct page *page = alloc_page(PAL_USER);
+    if(page == NULL){
+        return false;
+    }
+    page->page_ve = ve;
+    /*ve->locked = true;
+    if(ve->phy_loaded){
+      free_page(page);
+      return false;
+    }*/
+    //printf("this is mm_fault %d\n", ve->vaddr);
+    //page type별 처리
+    switch(ve->type){
+
+        case VM_BIN:
+            // physical memory에 load
+            if(!load_from_disk(page->paddr, ve)){
+                // 실패시
+                //printf("fail load\n");
+                free_page(page->paddr);
+                return false;
+            }
+            break;
+        case VM_FILE:
+            if(!load_from_disk(page->paddr, ve)){
+                // 실패시
+                free_page(page->paddr);
+                return false;
+            }
+            break;
+        case VM_ANON:
+            // swap in
+            swap_in(ve->swap_arr, page->paddr);
+            break;
+    }
+
+    //physical과 virtual address mapping
+    if(!install_page(ve->vaddr, page->paddr, ve->ok_write)){
+        free_page(page->paddr);
+        return false;
+    }
+    
+    //success
+    ve->phy_loaded = true;
+    return true;
+    
+
+}
+
+// stacj growth
+bool stack_growth(void *addr){
+
+    // stack의 크기가 벗어나는지 확인
+    /*if((size_t)(PHYS_BASE - pg_round_down(addr)) > MAX_STACK_SIZE){
+        return false;
+    }*/
+    //page 및 virtual entry 할당
+    struct page *page = alloc_page(PAL_USER | PAL_ZERO);
+    struct virtual_entry *ve = malloc(sizeof(struct virtual_entry));
+    //printf("this is stack growth\n");
+    /*if(ve == NULL){
+        return false;
+    }*/
+    if(page == NULL){
+        free(ve);
+        return false;
+    }
+    //값 초기화
+
+    ve->type = VM_ANON;
+    ve->vaddr = pg_round_down(addr);
+    ve->phy_loaded = true;
+    ve->ok_write = true;
+    //ve->locked = true;
+    page -> page_ve = ve;
+
+    //page 설정
+    if(!insert_hash(&thread_current()->virtual, ve)
+    || !install_page(ve->vaddr, page->paddr, ve->ok_write)){
+
+        free_page(page->paddr);
+        free(ve);
+        return false;
+    }
+    /*if(intr_context()){
+      ve->locked = false;
+    }*/
+
+    return true;
 }

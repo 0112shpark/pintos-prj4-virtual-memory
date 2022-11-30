@@ -4,6 +4,8 @@
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/vaddr.h"
+#include "vm/page.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -147,15 +149,51 @@ page_fault (struct intr_frame *f)
   not_present = (f->error_code & PF_P) == 0;
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
-
+  
+  
+  /* user가 아니면 exit(-1) signal*/
+  /*if(!user || is_kernel_vaddr(fault_addr) || not_present)
+  {
+   exit(-1);
+  }*/
+  //checking address
+   if (not_present){
+      //printf("not_present\n");
+   // fault_addr확인 후 stack growth
+      //check_and_growth(fault_addr, f->esp);
+      //printf("DONE\n");
+      //printf("exception addr:%d\n", fault_addr);
+      bool result;
+      struct virtual_entry *ve = search_ve(fault_addr);
+      //printf("exception%d\n", ve->offset);
+      if(ve!= NULL){
+         result = handle_mm_fault(ve);
+         //printf("handle fault res = %d\n", result);
+         if(!result){
+            exit(-1);
+         }
+         //stack_growth(fault_addr);
+      }
+      else{
+         //올바른 주소인지 체크(stack 영역)
+         result = check_addr(fault_addr, f->esp);
+         if(!result){
+            exit(-1);
+         }
+         stack_growth(fault_addr);
+      }
+   }
+   else{
+      exit(-1);
+   }
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
-  printf ("Page fault at %p: %s error %s page in %s context.\n",
+  /*printf ("Page fault at %p: %s error %s page in %s context.\n",
           fault_addr,
           not_present ? "not present" : "rights violation",
           write ? "writing" : "reading",
           user ? "user" : "kernel");
-  kill (f);
+  kill (f);*/
 }
 
