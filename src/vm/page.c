@@ -108,13 +108,13 @@ static void kill_func(struct hash_elem *e, void *aux)
     struct virtual_entry *ve = hash_entry(e, struct virtual_entry, elem);
 
     // physical memory에 load되어 있으면
-    //if (ve->phy_loaded)
-    //{
+    if (ve->phy_loaded)
+    {
         // page 제거
         void *paddr = pagedir_get_page(thread_current()->pagedir, ve->vaddr);
         free_page(paddr);
         pagedir_clear_page(thread_current()->pagedir, ve->vaddr);
-    //}
+    }
     free(ve);
 }
 
