@@ -102,6 +102,8 @@ void free_page(void *paddr){
 // swap_list안에서의 이동-> 다음 elem 반환
 static struct list_elem* move_swap_list()
 {
+    struct list_elem* ret_elem;
+    lock_acquire(&swap_lock);
     if(list_empty(&swap_list)){
         return NULL;
     }
@@ -109,19 +111,30 @@ static struct list_elem* move_swap_list()
     if(swap_victim == NULL || swap_victim ==list_end(&swap_list))
     {
         //list의 끝이면
-         return list_begin(&swap_list);
+         ret_elem = list_begin(&swap_list);
+         lock_release(&swap_lock);
+         return ret_elem;
+         //return list_begin(swap_victim);
 
         
     }
 
     //list의 끝이면
     if(list_next(swap_victim) ==list_end(&swap_list)){
-        return list_begin(&swap_list);
+         ret_elem = list_begin(&swap_list);
+         lock_release(&swap_lock);
+         return ret_elem;
+         //return list_begin(swap_victim);
+
     }
     else{
-        return list_next(swap_victim);
+         ret_elem = list_next(&swap_list);
+         lock_release(&swap_lock);
+         return ret_elem;
+
+        //return list_next(swap_victim);
     }
-    return swap_victim;
+    // swap_victim;
 }
 
 //페이지 공간 확보
@@ -137,7 +150,7 @@ void evict_page(enum palloc_flags flags){
         struct page* page = list_entry(swap_victim, struct page, swap);
 
         // bit이 1로 되어있으면
-        while(pagedir_is_accessed(page->thread->pagedir, page->page_ve->vaddr)){
+        while(page->page_ve->locked||pagedir_is_accessed(page->thread->pagedir, page->page_ve->vaddr)){
             
             //0으로 설정
             pagedir_set_accessed(page->thread->pagedir, page->page_ve->vaddr, false);
