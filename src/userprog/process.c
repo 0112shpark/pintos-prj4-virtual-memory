@@ -43,8 +43,11 @@ process_execute (const char *file_name)
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
-  if (fn_copy == NULL)
+  
+  if (fn_copy == NULL){
+    //printf("null fn_copy\n");
     return TID_ERROR;
+  }
   strlcpy (fn_copy, file_name, PGSIZE);
   
   /* exit에서 thread name을 받기위해 명령어만 따로 parsing*/
@@ -70,7 +73,7 @@ process_execute (const char *file_name)
   sema_down(&thread_current()->early_lock);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
-  
+  //printf("after seme_down\n");
   struct thread *cur =thread_current(); 
   struct thread *child; 
   struct list_elem *list = list_begin(&(cur)->child); // child의 list
@@ -79,7 +82,8 @@ process_execute (const char *file_name)
   {
     child = list_entry(list, struct thread, child_elem); // list의 첫 시작
     if(child->exit_stat == -1){
-      return process_wait(tid);
+      process_wait(child->tid);
+      break;
     }
     else if(list == list_end(&(cur->child)))// 마지막에 도달
       break;
@@ -205,7 +209,7 @@ start_process (void *file_name_)
   //child 로드 완료, lock 해제
   sema_up(&thread_current()->parents->early_lock);
   /* If load failed, quit. */
-  free_page (file_name);
+  palloc_free_page (file_name);
   
   if(!success){
     //printf("fail\n");
@@ -240,7 +244,8 @@ process_wait (tid_t child_tid)
   //if(child == NULL)
     //
   if(child == NULL)
-  {//printf("NULL thread\n");
+  {
+    //rintf("NULL thread\n");
     return -1;
   }
     sema_down(&(child->child_lock));
@@ -664,7 +669,7 @@ setup_stack (void **esp)
 
   kpage = alloc_page (PAL_USER | PAL_ZERO);
   
-      success = install_page ((uint8_t *) PHYS_BASE- PGSIZE, kpage->paddr, true);
+      success = install_page (((uint8_t *) PHYS_BASE)- PGSIZE, kpage->paddr, true);
       
       if (success){
         *esp = PHYS_BASE;
@@ -732,11 +737,11 @@ bool handle_mm_fault(struct virtual_entry *ve)
         return false;
     }
     page->page_ve = ve;
-    /*ve->locked = true;
+
     if(ve->phy_loaded){
       free_page(page);
       return false;
-    }*/
+    }
     //printf("this is mm_fault %d\n", ve->vaddr);
     //page type별 처리
     switch(ve->type){
@@ -746,13 +751,6 @@ bool handle_mm_fault(struct virtual_entry *ve)
             if(!load_from_disk(page->paddr, ve)){
                 // 실패시
                 //printf("fail load\n");
-                free_page(page->paddr);
-                return false;
-            }
-            break;
-        case VM_FILE:
-            if(!load_from_disk(page->paddr, ve)){
-                // 실패시
                 free_page(page->paddr);
                 return false;
             }
@@ -787,9 +785,9 @@ bool stack_growth(void *addr){
     struct page *page = alloc_page(PAL_USER | PAL_ZERO);
     struct virtual_entry *ve = malloc(sizeof(struct virtual_entry));
     //printf("this is stack growth\n");
-    /*if(ve == NULL){
+    if(ve == NULL){
         return false;
-    }*/
+    }
     if(page == NULL){
         free(ve);
         return false;
@@ -802,7 +800,7 @@ bool stack_growth(void *addr){
     ve->ok_write = true;
     //ve->locked = true;
     page -> page_ve = ve;
-
+    
     //page 설정
     if(!insert_hash(&thread_current()->virtual, ve)
     || !install_page(ve->vaddr, page->paddr, ve->ok_write)){
@@ -811,9 +809,5 @@ bool stack_growth(void *addr){
         free(ve);
         return false;
     }
-    /*if(intr_context()){
-      ve->locked = false;
-    }*/
-
     return true;
 }

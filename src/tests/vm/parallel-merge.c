@@ -52,18 +52,19 @@ sort_chunks (const char *subprocess, int exit_status)
       /* Write this chunk to a file. */
       snprintf (fn, sizeof fn, "buf%zu", i);
       create (fn, CHUNK_SIZE);
-      //printf("here1\n");
+      
       quiet = true;
       CHECK ((handle = open (fn)) > 1, "open \"%s\"", fn);
-      //printf("here1.5\n");
+      
       write (handle, buf1 + CHUNK_SIZE * i, CHUNK_SIZE);
-      //printf("here2\n");
+      
       close (handle);
-      //printf("here3\n");
+      
       /* Sort with subprocess. */
-      snprintf (cmd, sizeof cmd, "%s %s", subprocess, fn);
+      snprintf (cmd, sizeof cmd, "%s %s", subprocess, fn);   
+      //printf("before exec\n");
       CHECK ((children[i] = exec (cmd)) != -1, "exec \"%s\"", cmd);
-      //printf("here4\n");
+     // printf("after exec\n");
       quiet = false;
     }
 

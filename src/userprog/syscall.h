@@ -14,6 +14,7 @@
 #include "vm/page.h"
 
 struct lock file_;
+//struct lock write_;
 
 struct file 
   {

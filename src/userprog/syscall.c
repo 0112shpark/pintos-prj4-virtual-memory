@@ -12,7 +12,6 @@
 #include "vm/page.h"
 
 static void syscall_handler (struct intr_frame *);
-
 //buffer가 유효한지 검사
 void check_buffer_length(void *buffer, unsigned size, void *esp){
 
@@ -37,13 +36,7 @@ void check_buffer_length(void *buffer, unsigned size, void *esp){
   }
   //printf("ve == NULL \n");
   exit(-1);
-  /*char* temp_str = buffer;
-	while(1)
-	{
-		check_and_growth(temp_str, esp);
-    if(*temp_str == 0) break;
-    temp_str++;
-	}*/
+ 
 }
 
 //문자열이 유효한 주소를 가지고 있는지 검사
@@ -73,30 +66,10 @@ void check_string(void *buffer, void *esp){
   }
   //printf("ve == NULL \n");
   exit(-1);
+  
 }
 
-//buffer가 swap되지 않도록 pin해놓는 역할
-void lock_buffer (void *start, int size)
-{
-	void *buf = start;
-	for (; buf < start+size; buf += PGSIZE)
-	{
-		struct virtual_entry *ve=search_ve(buf);
-		ve->locked = true;
-		if(!ve->phy_loaded)
-			handle_mm_fault(ve);
-	}
-}
-//buffer를 lock해논 것을 다시 swap할 수 있도록 unpin하는 역할
-void unlock_buffer (void *start, int size)
-{
-	void *buf = start;
-	for (; buf < start+size; buf += PGSIZE)
-	{
-		struct virtual_entry *ve=search_ve(buf);
-		ve->locked = false;
-	}
-}
+
 
 void
 syscall_init (void) 
@@ -118,7 +91,7 @@ syscall_handler (struct intr_frame *f )
   //printf("\n%d %d %d %d is in (f->esp)\n", *(uint32_t*)(f->esp),*(uint32_t*)(f->esp+4),*(uint32_t*)(f->esp+8),*(uint32_t*)(f->esp+12));
   //printf ("system call!\n");
   //hex_dump(f->esp, f->esp, 100,1);
-  //void *esp = f->esp;
+  void *esp = f->esp;
   check_and_growth(f->esp, f->esp);
   switch (*(uint32_t*)(f->esp)){
     case SYS_HALT:
@@ -131,7 +104,7 @@ syscall_handler (struct intr_frame *f )
       break;
     case SYS_EXEC:
       //printf("\ncmd: %d\n", (const char*)(f->esp+20));
-      //is_useradd(f->esp+4);
+      is_useradd(f->esp+4);
       check_string((void*)(f->esp+4),f->esp);
       f->eax = exec((const char*)*(uint32_t*)(f->esp+4));
       break;
@@ -140,17 +113,17 @@ syscall_handler (struct intr_frame *f )
       f->eax = wait((pid_t)*(uint32_t*)(f->esp+4));
       break;
     case SYS_READ:
-      //is_useradd(f->esp+4);
-      //is_useradd(f->esp+8);
-      //is_useradd(f->esp+12);
+      is_useradd(f->esp+4);
+      is_useradd(f->esp+8);
+      is_useradd(f->esp+12);
       check_buffer_length((void*)(f->esp+8), (unsigned)(f->esp+12),f->esp);
       f->eax = read((int)*(uint32_t*)(f->esp+4), (const void*)*(uint32_t*)(f->esp+8),(unsigned)*(uint32_t*)(f->esp+12));
       break;
     case SYS_WRITE:
     //printf("Write!\n");
-      //is_useradd(f->esp+4);
-      //is_useradd(f->esp+8);
-      //is_useradd(f->esp+12);      
+      is_useradd(f->esp+4);
+      is_useradd(f->esp+8);
+      is_useradd(f->esp+12);    
       check_buffer_length((void*)(f->esp+8), (unsigned)(f->esp+12),f->esp);
       f->eax = write((int)*(uint32_t*)(f->esp+4), (const void*)*(uint32_t*)(f->esp+8),(unsigned)*(uint32_t*)(f->esp+12));
       break;
@@ -168,16 +141,16 @@ syscall_handler (struct intr_frame *f )
     case SYS_CREATE:
       is_useradd(f->esp+4);
       is_useradd(f->esp+8);
-      //check_string((void*)(f->esp+4),f->esp);
+      check_string((void*)(f->esp+4),f->esp);
       f->eax = create((const char*)*(uint32_t*)(f->esp+4), (unsigned)*(uint32_t*)(f->esp+8));
       break;
     case SYS_REMOVE:
       is_useradd(f->esp+4);
-      //check_string((void*)(f->esp+4),f->esp);
+      check_string((void*)(f->esp+4),f->esp);
       f->eax = remove((const char*)*(uint32_t*)(f->esp+4));
       break;
     case SYS_OPEN:
-      //is_useradd(f->esp+4);
+      is_useradd(f->esp+4);
       check_string((const void*)(f->esp+4),f->esp);
       f->eax = open((const char*)*(uint32_t*)(f->esp+4));
       break;
@@ -222,8 +195,10 @@ void exit (int status)
 pid_t exec (const char *cmd_line){
   
   lock_acquire(&file_);
-  //printf("executing.. %s\n", thread_name());
+  //printf("executing.. %s- %s\n", thread_name(), cmd_line);
+  
   pid_t pid = (pid_t)process_execute(cmd_line);
+  //printf("executing done %s\n", thread_name());
   lock_release(&file_);
   return pid;
 }
@@ -242,7 +217,7 @@ int read (int fd, void *buffer, unsigned size){
   }
   lock_acquire(&file_);
   is_useradd(buffer);
-  lock_buffer(buffer, size);
+
   if(!fd){
     bytes_read=0;
     while(input_getc()!='\0'){
@@ -254,7 +229,6 @@ int read (int fd, void *buffer, unsigned size){
     if(thread_current()->fd[fd] == NULL)
     {
       
-      unlock_buffer(buffer, size);
       lock_release(&file_);
       //printf("exit\n");
       exit(-1);
@@ -262,13 +236,12 @@ int read (int fd, void *buffer, unsigned size){
     bytes_read = file_read(thread_current()->fd[fd], buffer, size);
   }
   
-  unlock_buffer(buffer, size);
   lock_release(&file_);
   return bytes_read;
 }
 int write(int fd, const void *buffer, unsigned size)
 {
-  int return_val;
+  int return_val = 0;
   //printf("\nWrite\n");
   
   if(buffer == NULL)
@@ -277,11 +250,10 @@ int write(int fd, const void *buffer, unsigned size)
   }
   //lock_acquire(&file_);
   //is_useradd(buffer);
-  //lock_buffer(buffer, size);
+
   if(fd == 1){
     putbuf(buffer, size);
     
-    //unlock_buffer(buffer, size);
     //lock_release(&file_);
     return size;
   }
@@ -290,8 +262,8 @@ int write(int fd, const void *buffer, unsigned size)
     if(thread_current()->fd[fd] == NULL)
     {
       
-      //unlock_buffer(buffer, size);
       //lock_release(&file_);
+      
       exit(-1);
     }
     if(thread_current()->fd[fd]->deny_write)
@@ -301,12 +273,10 @@ int write(int fd, const void *buffer, unsigned size)
     }
     return_val = file_write(thread_current()->fd[fd], buffer, size);
     
-    //unlock_buffer(buffer, size);
     //lock_release(&file_);
     return return_val;
   }
   
-  //unlock_buffer(buffer, size);
   //lock_release(&file_);
   return -1;
 }
@@ -325,9 +295,9 @@ bool remove (const char *file){
   if(file == NULL){
     exit(-1);
   }
-  //lock_acquire(&file_);
+  lock_acquire(&file_);
   return_val = filesys_remove(file);
-  //lock_release(&file_);
+  lock_release(&file_);
   return return_val;
 }
 int open (const char *file)

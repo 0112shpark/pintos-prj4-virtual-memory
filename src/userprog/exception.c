@@ -159,10 +159,8 @@ page_fault (struct intr_frame *f)
   //checking address
    if (not_present){
       //printf("not_present\n");
-   // fault_addr확인 후 stack growth
-      //check_and_growth(fault_addr, f->esp);
       //printf("DONE\n");
-      //printf("exception addr:%d\n", fault_addr);
+      //printf("exception addr:%p\n", fault_addr);
       bool result;
       struct virtual_entry *ve = search_ve(fault_addr);
       //printf("exception%d\n", ve->offset);
