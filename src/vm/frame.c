@@ -47,7 +47,7 @@ void delete_swap_list(struct page *page){
     list_remove(&page->swap);
 }
 
-// swap_list에 페이지 삽입
+
 struct page* alloc_page(enum palloc_flags flags){
     //lock_acquire(&swap_lock);
     // 페이지 할당
@@ -142,7 +142,7 @@ void evict_page(enum palloc_flags flags){
 
     //lock_acquire(&swap_lock);
 
-    //if(!list_empty(&swap_list)){
+    if(!list_empty(&swap_list)){
         
         swap_victim = move_swap_list();
 
@@ -150,7 +150,7 @@ void evict_page(enum palloc_flags flags){
         struct page* page = list_entry(swap_victim, struct page, swap);
 
         // bit이 1로 되어있으면
-        while(page->page_ve->locked||pagedir_is_accessed(page->thread->pagedir, page->page_ve->vaddr)){
+        while(pagedir_is_accessed(page->thread->pagedir, page->page_ve->vaddr)){
             
             //0으로 설정
             pagedir_set_accessed(page->thread->pagedir, page->page_ve->vaddr, false);
@@ -171,14 +171,6 @@ void evict_page(enum palloc_flags flags){
                     victim->page_ve->type = VM_ANON; // for demand paging
                 }
                 break;
-            case VM_FILE:
-                //dirty bit 검사 -> 1 이면 파일에 내용저장
-                if(pagedir_is_dirty(victim->thread->pagedir, victim->page_ve->vaddr)){
-                   // 파일에 변경내용 저장
-                  
-                   file_write_at(victim->page_ve->file, victim->page_ve->vaddr, victim->page_ve->read_bytes,victim->page_ve->offset);
-                }
-                break;
             case VM_ANON:
                 // swap에 저장
                 victim->page_ve->swap_arr = swap_out(victim->paddr);
@@ -192,7 +184,7 @@ void evict_page(enum palloc_flags flags){
         palloc_free_page(page->paddr);
         
         free(page);
-   // }
+    }
     //lock_release(&swap_lock);
 }
 

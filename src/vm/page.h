@@ -4,8 +4,7 @@
 #include <hash.h>
 
 #define VM_BIN 0 // 바이너리 파일로부터 데이터 로드
-#define VM_FILE 1 // mapping된 파일로부터 로드 *not used*
-#define VM_ANON 2 // swapping된 영역에서 로드
+#define VM_ANON 1 // swapping된 영역에서 로드
 #define MAX_STACK_SIZE (1 << 23)
 
 struct virtual_entry{
@@ -14,7 +13,7 @@ struct virtual_entry{
     void *vaddr;  // virtaul address
     bool ok_write; // writable?
     bool phy_loaded;  // physical memory에 있는지 확인
-    bool locked; // disk에서 파일을 읽을 때, swap되지 않도록 검사하는 변수
+
     struct file* file; // mapping된 파일
 
     size_t offset; // 읽을 파일 크기

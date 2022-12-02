@@ -47,7 +47,7 @@ static bool compare_hash(const struct hash_elem *a, const struct hash_elem *b,vo
 /*hash table에 virtual entry 삽입*/
 bool insert_hash(struct hash *virtual, struct virtual_entry *ve)
 {
-    ve->locked = false;
+    
     //printf("insert:%d\n", ve->offset);
     // hash_insert는 hash table에 값이 존재하면 그대로 값 반환, 없으면 삽입 후 NULL반환
     if (hash_insert(virtual, &ve->elem) == NULL)
@@ -144,7 +144,7 @@ struct virtual_entry *check_and_growth(void *addr, void *esp)
     if (growth_check)
     {
         //printf("success growth check\n");
-        bool growth_result = stack_growth(addr);
+        stack_growth(addr);
         //printf("growth done with %d\n", growth_result);
         /*if (growth_result == false)
         {
