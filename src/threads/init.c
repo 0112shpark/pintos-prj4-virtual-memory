@@ -25,15 +25,15 @@
 #include "vm/frame.h"
 #include "vm/swap.h"
 #include "vm/page.h"
-#ifdef USERPROG
+
 #include "userprog/process.h"
 #include "userprog/exception.h"
 #include "userprog/gdt.h"
 #include "userprog/syscall.h"
 #include "userprog/tss.h"
-#else
+
 #include "tests/threads/tests.h"
-#endif
+
 #ifdef FILESYS
 #include "devices/block.h"
 #include "devices/ide.h"
